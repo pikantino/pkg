@@ -1,0 +1,34 @@
+{
+  "name": "@pikantino/pkg",
+  "version": "0.1.0",
+  "description": "Pikantino - packages manager",
+  "main": "./lib/index.js",
+  "bin": {
+    "pikantino-pkg": "./bin/index.js"
+  },
+  "directories": {
+    "lib": "lib"
+  },
+  "dependencies": {
+    "glob": "^7.1.3",
+    "transform-imports": "^2.0.0",
+    "typescript": "^3.4.1"
+  },
+  "devDependencies": {
+    "@types/node": "^11.12.2",
+    "typescript": "^3.4.1"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pikantino/pkg.git"
+  },
+  "author": "targettaiga <targettaiga@gmail.com>",
+  "license": "GPL-3.0",
+  "bugs": {
+    "url": "https://github.com/pikantino/pkg/issues"
+  },
+  "homepage": "https://github.com/pikantino/pkg#readme"
+}
