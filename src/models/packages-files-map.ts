@@ -1,6 +1,7 @@
-import {PackageFiles} from "./package-files";
 import * as path from 'path';
 import * as fs from 'fs';
+
+import {PackageFiles} from "./package-files";
 
 export class PackagesFilesMap {
     constructor(public map: { [packageName: string]: PackageFiles },
