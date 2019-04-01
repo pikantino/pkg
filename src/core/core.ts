@@ -2,6 +2,7 @@ import * as path from 'path';
 import * as fs from 'fs-extra';
 import * as glob from 'glob';
 import * as transform from 'transform-imports';
+import * as ProgressBar from 'progress';
 
 import {getFileName} from "../utils/path-utils";
 import {PackagesFilesMap} from "../models/packages-files-map";
@@ -11,23 +12,17 @@ import {handleError} from "../utils/handle-error";
 function readDependencies(packagePath: string): Promise<{ [key: string]: string }> {
     return readPackageJson(packagePath).then((packageJson: { [key: string]: any }) =>
         Promise.resolve(packageJson.dependencies))
-        .catch((error: Error) => handleError(error, `Cannot read package.json in ${packagePath}`))
+        .catch((error: Error) => handleError(error, `Cannot read package.json in ${packagePath} folder`))
 }
 
 function readPackageJson(folderPath: string): Promise<{ [key: string]: any }> {
-    return new Promise((resolve) => {
-        fs.readFile(path.join(folderPath, 'package.json'), (error: NodeJS.ErrnoException, data: Buffer) => {
-            if (error) {
-                throw error;
-            }
-            resolve(JSON.parse(data.toString()));
-        });
-    });
+    return fs.readFile(path.join(folderPath, 'package.json'))
+        .then((buffer: Buffer) => Promise.resolve(JSON.parse(buffer.toString())));
 }
 
 async function locatePackageFiles(packagePath: string): Promise<PackageFiles> {
     const packageJson: { [key: string]: any } = await readPackageJson(packagePath)
-        .catch((error: Error) => handleError(error, `Cannot read package.json in ${packagePath}`, {}));
+        .catch((error: Error) => handleError(error, `Cannot read package.json in ${packagePath} folder`, {}));
 
     if (packageJson['es2015']) {
         const es6EntryPath = packageJson['es2015'];
@@ -42,9 +37,21 @@ async function locatePackageFiles(packagePath: string): Promise<PackageFiles> {
 async function createPackagesFilesMap(dependencies: string[], modulesFolderPath: string, cwd: string): Promise<PackagesFilesMap> {
     const map: { [packageName: string]: PackageFiles } = {};
 
+    const progress: ProgressBar = createProgressBar(dependencies.length, 'Reading dependencies...');
+
     for (let key of dependencies) {
-        map[key] = await locatePackageFiles(path.join(cwd, 'node_modules', key))
-            .catch((error: Error) => handleError(error, `Cannot locate ${key} package files`, {files: []}))
+        progress.render({
+            token1: key
+        });
+
+        const files: PackageFiles = await locatePackageFiles(path.join(cwd, 'node_modules', key))
+            .catch((error: Error) => handleError(error, `Cannot locate ${key} package files`, null));
+
+        if (files) {
+            map[key] = files;
+        }
+
+        progress.tick();
     }
 
     return new PackagesFilesMap(map, `/${modulesFolderPath}/`); // TODO
@@ -71,16 +78,26 @@ function copyFile(packageFolder: string, fileRelativePath: string, outDirPath: s
 
 // modulesFolder format %folder_name%
 async function copyFiles(packagesFilesMap: PackagesFilesMap, outDir: string, modulesFolder: string, cwd: string): Promise<void> {
+    const progress: ProgressBar = createProgressBar(Object.keys(packagesFilesMap.map).length, 'Copying files...');
+
     for (let key in packagesFilesMap.map) {
         const outDirPath: string = path.join(cwd, outDir, modulesFolder, key);
 
         fs.mkdirSync(outDirPath, {recursive: true});
 
         for (let file of packagesFilesMap.map[key].files) {
+            progress.render({
+                token1: key,
+                token2: file
+            });
             await copyFile(packagesFilesMap.map[key].folder, file, outDirPath, packagesFilesMap)
                 .catch((error: Error) => handleError(error, `Cannot copy file ${file} of ${key} package`));
         }
+
+        progress.tick();
     }
+
+    progress.terminate();
 }
 
 function setDependencyMap(es6FolderPath: string, es6EntryFileName: string): Promise<PackageFiles> {
@@ -101,13 +118,21 @@ function setDependencyMap(es6FolderPath: string, es6EntryFileName: string): Prom
     }));
 }
 
-export async function pack(): Promise<PackagesFilesMap> {
+function createProgressBar(length: number, message: string): ProgressBar {
+    return new ProgressBar(`${message} [:bar] :token1 :token2`, {
+        complete: '=',
+        incomplete: ' ',
+        width: 20,
+        clear: true,
+        total: length,
+        callback: () => console.log(`${message} Done.`)
+    });
+}
+
+export async function pack(outDir: string, modulesFolder): Promise<PackagesFilesMap> {
     const cwd = process.cwd();
 
-    const outDir: string = 'dist';
-    const modulesFolder = 'web_modules';
-
-    const dependencies = await readDependencies('./package.json')
+    const dependencies = await readDependencies('./')
         .catch((error: Error) => handleError(error, `Cannot read package.json file`));
 
     const packageFilesMap: PackagesFilesMap = await createPackagesFilesMap(Object.keys(dependencies), modulesFolder, cwd)
@@ -115,6 +140,8 @@ export async function pack(): Promise<PackagesFilesMap> {
 
     await copyFiles(packageFilesMap, outDir, modulesFolder, cwd)
         .catch((error: Error) => handleError(error, `Cannot copy dependencies`));
+
+    console.log('Packages are built.');
 
     return packageFilesMap;
 }
