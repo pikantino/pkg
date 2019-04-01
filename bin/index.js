@@ -7,7 +7,7 @@ const argv = require('yargs')
     .alias('outDir', 'o')
     .describe('modules', 'Modules output directory')
     .default('modules', 'web_modules')
-    .alias('outDir', 'm')
+    .alias('modules', 'm')
     .help()
     .argv;
 
