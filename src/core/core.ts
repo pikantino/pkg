@@ -4,7 +4,7 @@ import * as glob from 'glob';
 import * as transform from 'transform-imports';
 import * as ProgressBar from 'progress';
 
-import {getFileName} from "../utils/path-utils";
+import {getFileName} from "../utils/get-file-name";
 import {PackagesFilesMap} from "../models/packages-files-map";
 import {PackageFiles} from "../models/package-files";
 import {handleError} from "../utils/handle-error";
