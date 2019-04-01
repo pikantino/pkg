@@ -1,5 +1,5 @@
 export interface PackageFiles {
-    entry: string;
-    folder: string;
+    entry?: string;
+    folder?: string;
     files: string[];
 }

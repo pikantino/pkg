@@ -1,71 +1,86 @@
 import * as path from 'path';
-import * as fs from 'fs';
+import * as fs from 'fs-extra';
 import * as glob from 'glob';
 import * as transform from 'transform-imports';
 
 import {getFileName} from "../utils/path-utils";
 import {PackagesFilesMap} from "../models/packages-files-map";
-import {writeFile} from "../utils/fs-utils";
 import {PackageFiles} from "../models/package-files";
+import {handleError} from "../utils/handle-error";
 
-function readDependencies(): Promise<{ [key: string]: string }> {
+function readDependencies(packagePath: string): Promise<{ [key: string]: string }> {
+    return readPackageJson(packagePath).then((packageJson: { [key: string]: any }) =>
+        Promise.resolve(packageJson.dependencies))
+        .catch((error: Error) => handleError(error, `Cannot read package.json in ${packagePath}`))
+}
+
+function readPackageJson(folderPath: string): Promise<{ [key: string]: any }> {
     return new Promise((resolve) => {
-        fs.readFile('./package.json', (error: NodeJS.ErrnoException, data: Buffer) => {
+        fs.readFile(path.join(folderPath, 'package.json'), (error: NodeJS.ErrnoException, data: Buffer) => {
             if (error) {
                 throw error;
             }
-            resolve(JSON.parse(data.toString()).dependencies);
+            resolve(JSON.parse(data.toString()));
         });
     });
 }
 
-async function createPackageFilesMap(dependencies: string[], modulesFolderPath: string, cwd: string): Promise<PackagesFilesMap> {
+async function locatePackageFiles(packagePath: string): Promise<PackageFiles> {
+    const packageJson: { [key: string]: any } = await readPackageJson(packagePath)
+        .catch((error: Error) => handleError(error, `Cannot read package.json in ${packagePath}`, {}));
+
+    if (packageJson['es2015']) {
+        const es6EntryPath = packageJson['es2015'];
+
+        const es6EntryFileName = getFileName(es6EntryPath);
+        const es6FolderPath = path.join(packagePath, es6EntryPath, '../');
+
+        return await setDependencyMap(es6FolderPath, es6EntryFileName);
+    }
+}
+
+async function createPackagesFilesMap(dependencies: string[], modulesFolderPath: string, cwd: string): Promise<PackagesFilesMap> {
     const map: { [packageName: string]: PackageFiles } = {};
 
-    await Promise.all(dependencies.map((key: string) => {
-        const dependencyPath = path.join(cwd, 'node_modules', key);
-        const packageJsonPath = path.join(dependencyPath, 'package.json');
-
-        if (fs.existsSync(packageJsonPath)) {
-            const packageJson = JSON.parse(fs.readFileSync(packageJsonPath).toString());
-            const es6EntryPath = packageJson['es2015'];
-
-            if (es6EntryPath) {
-                const es6EntryFileName = getFileName(es6EntryPath);
-                const es6FolderPath = path.join(dependencyPath, es6EntryPath, '../');
-
-                return setDependencyMap(es6FolderPath, es6EntryFileName).then((packageFiles: PackageFiles) => {
-                    map[key] = packageFiles;
-                }, () => {
-                    console.log(`Cannot read ${key}'s files `);
-                });
-            }
-        }
-    }));
+    for (let key of dependencies) {
+        map[key] = await locatePackageFiles(path.join(cwd, 'node_modules', key))
+            .catch((error: Error) => handleError(error, `Cannot locate ${key} package files`, {files: []}))
+    }
 
     return new PackagesFilesMap(map, `/${modulesFolderPath}/`); // TODO
 }
 
+function transformImports(code: string, packagesFilesMap: PackagesFilesMap): string {
+    return transform(code, (importDefs: { source: string }[]) => {
+        importDefs.forEach((importDef) => {
+            importDef.source = packagesFilesMap.resolvePath(importDef.source);
+        });
+    });
+}
+
+function transformExports(code: string): string {
+    return code.replace(/(export.*['"])(.*)(['"];)/gm, '$1$2.js$3');
+}
+
+function copyFile(packageFolder: string, fileRelativePath: string, outDirPath: string, packagesFilesMap: PackagesFilesMap): Promise<void> {
+    const filePath: string = path.join(packageFolder, fileRelativePath);
+    const code: string = fs.readFileSync(filePath).toString();
+
+    return fs.outputFile(path.join(outDirPath, fileRelativePath), transformExports(transformImports(code, packagesFilesMap)));
+}
+
 // modulesFolder format %folder_name%
-function copyFiles(packagesFilesMap: PackagesFilesMap, outDir: string, modulesFolder: string, cwd: string): Promise<void[]> {
-    return Promise.all(Object.keys(packagesFilesMap.map).map((key: string) => {
+async function copyFiles(packagesFilesMap: PackagesFilesMap, outDir: string, modulesFolder: string, cwd: string): Promise<void> {
+    for (let key in packagesFilesMap.map) {
         const outDirPath: string = path.join(cwd, outDir, modulesFolder, key);
 
         fs.mkdirSync(outDirPath, {recursive: true});
 
-        console.log(key);
-        packagesFilesMap.map[key].files.forEach((file: string) => {
-            const filePath: string = path.join(packagesFilesMap.map[key].folder, file);
-            const code: string = fs.readFileSync(filePath).toString();
-            const transformedCode: string = transform(code, (importDefs: { source: string }[]) => {
-                importDefs.forEach((importDef) => {
-                    importDef.source = packagesFilesMap.resolvePath(importDef.source);
-                });
-            }).replace(/(export.*['"])(.*)(['"];)/gm, '$1$2.js$3');
-
-            return writeFile(path.join(outDirPath, file), filePath, transformedCode);
-        });
-    }));
+        for (let file of packagesFilesMap.map[key].files) {
+            await copyFile(packagesFilesMap.map[key].folder, file, outDirPath, packagesFilesMap)
+                .catch((error: Error) => handleError(error, `Cannot copy file ${file} of ${key} package`));
+        }
+    }
 }
 
 function setDependencyMap(es6FolderPath: string, es6EntryFileName: string): Promise<PackageFiles> {
@@ -92,20 +107,14 @@ export async function pack(): Promise<PackagesFilesMap> {
     const outDir: string = 'dist';
     const modulesFolder = 'web_modules';
 
-    const dependencies = await readDependencies()
-        .then(null, () => {
-            throw new Error('Cannot read package.json');
-        });
+    const dependencies = await readDependencies('./package.json')
+        .catch((error: Error) => handleError(error, `Cannot read package.json file`));
 
-    const packageFilesMap: PackagesFilesMap = await createPackageFilesMap(Object.keys(dependencies), modulesFolder, cwd)
-        .then(null, (error: NodeJS.ErrnoException) => {
-            throw new Error(`Cannot create packages files map: \n ${JSON.stringify(error)}`);
-        });
+    const packageFilesMap: PackagesFilesMap = await createPackagesFilesMap(Object.keys(dependencies), modulesFolder, cwd)
+        .catch((error: Error) => handleError(error, `Cannot create packages files map`));
 
     await copyFiles(packageFilesMap, outDir, modulesFolder, cwd)
-        .then(null, (error: any) => {
-            throw new Error(`Cannot copy packages: \n ${JSON.stringify(error)}`);
-        });
+        .catch((error: Error) => handleError(error, `Cannot copy dependencies`));
 
     return packageFilesMap;
 }
