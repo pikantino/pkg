@@ -8,6 +8,7 @@ import {getFileName} from "../utils/get-file-name";
 import {PackagesFilesMap} from "../models/packages-files-map";
 import {PackageFiles} from "../models/package-files";
 import {handleError} from "../utils/handle-error";
+import {PackageInfo} from "../models/package-info";
 
 function readDependencies(packagePath: string): Promise<{ [key: string]: string }> {
     return readPackageJson(packagePath).then((packageJson: { [key: string]: any }) =>
@@ -20,7 +21,7 @@ function readPackageJson(folderPath: string): Promise<{ [key: string]: any }> {
         .then((buffer: Buffer) => Promise.resolve(JSON.parse(buffer.toString())));
 }
 
-async function locatePackageFiles(packagePath: string): Promise<PackageFiles> {
+async function collectPackageInfo(packagePath: string): Promise<PackageInfo> {
     const packageJson: { [key: string]: any } = await readPackageJson(packagePath)
         .catch((error: Error) => handleError(error, `Cannot read package.json in ${packagePath} folder`, {}));
 
@@ -30,12 +31,34 @@ async function locatePackageFiles(packagePath: string): Promise<PackageFiles> {
         const es6EntryFileName = getFileName(es6EntryPath);
         const es6FolderPath = path.join(packagePath, es6EntryPath, '../');
 
-        return await setDependencyMap(es6FolderPath, es6EntryFileName);
+        return {
+            files: await setDependencyMap(es6FolderPath, es6EntryFileName),
+            global: false
+        };
+    } else if (packageJson['module']) {
+        return {
+            files: createSingleFilePackage(packagePath, packageJson['module']),
+            global: false
+        };
+    } else {
+        return {
+            files: createSingleFilePackage(packagePath, packageJson['main']),
+            global: true
+        };
     }
 }
 
+function createSingleFilePackage(packagePath: string, modulePath: string): PackageFiles {
+    return {
+        entry: modulePath,
+        folder: packagePath,
+        files: [modulePath]
+    };
+}
+
 async function createPackagesFilesMap(dependencies: string[], modulesFolderPath: string, cwd: string): Promise<PackagesFilesMap> {
-    const map: { [packageName: string]: PackageFiles } = {};
+    const modules: { [packageName: string]: PackageFiles } = {};
+    const globals: { [packageName: string]: PackageFiles } = {};
 
     const progress: ProgressBar = createProgressBar(dependencies.length, 'Reading dependencies...');
 
@@ -44,21 +67,23 @@ async function createPackagesFilesMap(dependencies: string[], modulesFolderPath:
             token1: key
         });
 
-        const files: PackageFiles = await locatePackageFiles(path.join(cwd, 'node_modules', key))
-            .catch((error: Error) => handleError(error, `Cannot locate ${key} package files`, null));
+        const info: PackageInfo = await collectPackageInfo(path.join(cwd, 'node_modules', key))
+            .catch((error: Error) => handleError(error, `Cannot collect ${key} package info`, null));
 
-        if (files) {
-            map[key] = files;
+        if (info.global) {
+            globals[key] = info.files;
+        } else {
+            modules[key] = info.files;
         }
 
         progress.tick();
     }
 
-    return new PackagesFilesMap(map, `/${modulesFolderPath}/`); // TODO
+    return new PackagesFilesMap(modules, globals, `/${modulesFolderPath}/`); // TODO
 }
 
 function transformImports(code: string, packagesFilesMap: PackagesFilesMap): string {
-    return transform(code, (importDefs: { source: string }[]) => {
+    return transform(code, (importDefs: any[]) => {
         importDefs.forEach((importDef) => {
             importDef.source = packagesFilesMap.resolvePath(importDef.source);
         });
@@ -78,19 +103,19 @@ function copyFile(packageFolder: string, fileRelativePath: string, outDirPath: s
 
 // modulesFolder format %folder_name%
 async function copyFiles(packagesFilesMap: PackagesFilesMap, outDir: string, modulesFolder: string, cwd: string): Promise<void> {
-    const progress: ProgressBar = createProgressBar(Object.keys(packagesFilesMap.map).length, 'Copying files...');
+    const progress: ProgressBar = createProgressBar(Object.keys(packagesFilesMap.modules).length, 'Copying files...');
 
-    for (let key in packagesFilesMap.map) {
+    for (let key in packagesFilesMap.modules) {
         const outDirPath: string = path.join(cwd, outDir, modulesFolder, key);
 
         fs.ensureDirSync(outDirPath);
 
-        for (let file of packagesFilesMap.map[key].files) {
+        for (let file of packagesFilesMap.modules[key].files) {
             progress.render({
                 token1: key,
                 token2: file
             });
-            await copyFile(packagesFilesMap.map[key].folder, file, outDirPath, packagesFilesMap)
+            await copyFile(packagesFilesMap.modules[key].folder, file, outDirPath, packagesFilesMap)
                 .catch((error: Error) => handleError(error, `Cannot copy file ${file} of ${key} package`));
         }
 
@@ -101,7 +126,7 @@ async function copyFiles(packagesFilesMap: PackagesFilesMap, outDir: string, mod
 }
 
 function setDependencyMap(es6FolderPath: string, es6EntryFileName: string): Promise<PackageFiles> {
-    // `${es6FolderPath}/**/+(*.js|*.map)`
+    // `${es6FolderPath}/**/+(*.js|*.modules)`
     return new Promise((resolve) => glob(`${es6FolderPath}/**/*.js`, (error: NodeJS.ErrnoException, files: string[]) => {
         if (error) {
             throw error;
@@ -142,6 +167,8 @@ export async function pack(outDir: string, modulesFolder): Promise<PackagesFiles
         .catch((error: Error) => handleError(error, `Cannot copy dependencies`));
 
     console.log('Packages are built.');
+
+    console.log(`${Object.keys(packageFilesMap.globals).join(', ')} should be in global scope`);
 
     return packageFilesMap;
 }
