@@ -83,7 +83,7 @@ async function copyFiles(packagesFilesMap: PackagesFilesMap, outDir: string, mod
     for (let key in packagesFilesMap.map) {
         const outDirPath: string = path.join(cwd, outDir, modulesFolder, key);
 
-        fs.mkdirSync(outDirPath, {recursive: true});
+        fs.ensureDirSync(outDirPath);
 
         for (let file of packagesFilesMap.map[key].files) {
             progress.render({

@@ -1,6 +1,6 @@
 {
   "name": "@pikantino/pkg",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Pikantino - packages manager",
   "main": "./lib/index.js",
   "bin": {
