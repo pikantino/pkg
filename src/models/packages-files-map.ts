@@ -23,7 +23,10 @@ export class PackagesFilesMap {
             lookUpPackage.startsWith(knownPackage + '/'));
 
         if (!packageName) {
-            return lookUpPackage + '.js';
+            if (lookUpPackage.endsWith('.js')) {
+                return lookUpPackage;
+            }
+            return lookUpPackage + '.js'
         }
 
         if (lookUpPackage === packageName) {

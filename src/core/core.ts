@@ -22,8 +22,14 @@ function readPackageJson(folderPath: string): Promise<{ [key: string]: any }> {
 }
 
 async function collectPackageInfo(packagePath: string): Promise<PackageInfo> {
-    const packageJson: { [key: string]: any } = await readPackageJson(packagePath)
+    let packageJson: { [key: string]: any } = await readPackageJson(packagePath)
         .catch((error: Error) => handleError(error, `Cannot read package.json in ${packagePath} folder`, {}));
+
+    if(packagePath.includes('lodash')) {
+        packageJson = {
+            es2015: '../../lodash/modularize/lodash.js'
+        }
+    }
 
     if (packageJson['es2015']) {
         const es6EntryPath = packageJson['es2015'];
@@ -91,7 +97,7 @@ function transformImports(code: string, packagesFilesMap: PackagesFilesMap): str
 }
 
 function transformExports(code: string): string {
-    return code.replace(/(export.*['"])(.*)(['"];)/gm, '$1$2.js$3');
+    return code.replace(/(export.*['"])(.*?)(?:\.js)*(['"];)/gm, '$1$2.js$3');
 }
 
 function copyFile(packageFolder: string, fileRelativePath: string, outDirPath: string, packagesFilesMap: PackagesFilesMap): Promise<void> {
